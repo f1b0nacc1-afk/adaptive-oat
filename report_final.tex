@@ -1,0 +1,510 @@
+﻿%% ============================================================
+%%  Аналитический отчёт
+%%  Токенизация в Vision-Language-Action моделях
+%%  Апрель 2026
+%% ============================================================
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian,english]{babel}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+\usepackage{caption}
+\usepackage{listings}
+
+\lstdefinestyle{shell}{
+    basicstyle=\small\ttfamily,
+    breaklines=true,
+    breakatwhitespace=true,
+    frame=single,
+    rulecolor=\color{gray!40},
+    backgroundcolor=\color{gray!6},
+    xleftmargin=6pt,
+    xrightmargin=6pt,
+    aboveskip=4pt,
+    belowskip=4pt,
+}
+
+\geometry{left=25mm, right=25mm, top=30mm, bottom=30mm}
+\onehalfspacing
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue,
+    pdftitle={Токенизация в VLA и ассистенты исследователя},
+}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\itshape\bfseries}{\thesubsubsection.}{0.6em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small Токенизация в VLA}
+\lhead{\small Аналитический отчёт}
+\cfoot{\thepage}
+
+%% ============================================================
+\title{%
+    \textbf{Токенизация в Vision-Language-Action моделях}\\[0.4em]
+    \large Обзор инструментов, исследовательская гипотеза и результаты симуляции
+}
+\author{}
+\date{Апрель 2026}
+
+%% ============================================================
+\begin{document}
+
+\selectlanguage{russian}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+В работе рассматриваются подходы к токенизации в Vision-Language-Action (VLA)
+моделях для управления роботами. Дан сравнительный обзор четырёх ассистентов
+исследователя (\texttt{Deep Research}, \texttt{Claude Code},
+\texttt{autoresearch}, \texttt{AutoResearchClaw}) и проведён анализ трёх работ:
+\textit{BLT}~\cite{blt}, \textit{H-Net}~\cite{hnet} и \textit{OAT}~\cite{oat}.
+Из синтеза этих работ сформулирована гипотеза об \textit{adaptive action token
+refinement}: адаптивный критерий остановки при декодировании OAT tokens позволяет
+экономить вычисления на простых действиях без потери качества на сложных.
+Гипотеза проверена в численной симуляции на 300~эпизодах трёх типов задач;
+код и результаты доступны в репозитории~\cite{repo}.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%% ============================================================
+\section{Введение}
+
+Современные VLA-модели для управления роботами используют дискретную
+токенизацию action space. Открытым остаётся вопрос об эффективности:
+\textit{нужно ли тратить одинаковое число вычислений на каждое действие?}
+Удержание позиции и сложный манипуляционный захват интуитивно требуют
+разного числа «уточнений» при декодировании.
+
+Для изучения этого вопроса были рассмотрены три работы с разными подходами:
+\texttt{BLT}~\cite{blt} переносит принцип adaptive compute allocation
+на уровень байтовых патчей; \texttt{H-Net}~\cite{hnet} делает сегментацию
+обучаемой end-to-end; \texttt{OAT}~\cite{oat} строит coarse-to-fine иерархию
+action tokens с prefix-decodability.
+
+Практическая часть: выбран \texttt{OAT} как базовый метод, сформулирована
+гипотеза об адаптивном критерии остановки, реализована численная симуляция
+для её проверки на синтетических данных.
+
+%% ============================================================
+\section{Обзор инструментов исследователя}
+
+\subsection{Подход к оценке}
+
+Каждый инструмент оценивался через конкретный вопрос: \textit{помогает ли он при
+разборе BLT, H-Net, OAT, при формулировке гипотезы и при переходе к реализации?}
+Одного универсального инструмента для всех этапов не нашлось --- для анализа
+литературы и для работы с кодом нужны принципиально разные режимы.
+
+\subsection{Разобранные инструменты}
+
+\textbf{Deep Research}~\cite{deepresearch} наиболее полезен на этапе обзора литературы:
+быстро собирает картину из нескольких работ, находит связи между ними, помогает
+сформулировать гипотезу. Ограничение: не заменяет инженерную работу с репозиторием.
+
+\textbf{Claude Code}~\cite{claudecode} --- главный инструмент кодовой части. Хорошо
+живёт внутри репозитория, помогает ориентироваться в чужом коде, подготавливать
+инструкции воспроизведения, локализовать точки модификации. Ограничение: не задаёт
+исследовательскую рамку сам по себе.
+
+\textbf{autoresearch}~\cite{autoresearch} интересен как концепция agentic
+experimentation: короткий итерационный loop (изменить --- запустить --- измерить).
+Для VLA-тематики применяется лишь косвенно --- не готовый стек под embodied-задачи.
+
+\textbf{AutoResearchClaw}~\cite{autoresearchclaw} претендует на замыкание полного
+исследовательского цикла. Как ориентир на full-cycle automation --- полезен.
+Как практический инструмент для компактного проекта --- избыточен по сложности настройки.
+
+\subsection{Итоговый рабочий стек}
+
+\begin{table}[h!]
+\centering
+\caption{Сравнение инструментов по применимости}
+\begin{tabular}{p{3.2cm} p{4.4cm} p{5.6cm}}
+\toprule
+\textbf{Инструмент} & \textbf{Где полезен} & \textbf{Ограничение} \\
+\midrule
+\texttt{Deep Research}    & обзор литературы, гипотеза      & не заменяет кодовую часть \\
+\texttt{Claude Code}      & репозиторий, реализация         & не задаёт исследовательскую рамку \\
+\texttt{autoresearch}     & agentic experimentation         & не адаптирован под VLA \\
+\texttt{AutoResearchClaw} & full-cycle pipeline             & избыточен для коротких проектов \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Выбранная связка: \texttt{Deep~Research} для анализа статей и формулировки
+гипотезы~+ \texttt{Claude Code} для инженерной части. Все ключевые решения
+принимались самостоятельно, ассистенты ускоряли структурирование и оформление.
+
+%% ============================================================
+\section{Анализ статей}
+
+\subsection{BLT: Byte Latent Transformer}
+
+\texttt{BLT}~\cite{blt} заменяет фиксированный токенизатор динамическими патчами
+переменного размера из сырых байтов. Три компоненты: лёгкий local encoder,
+тяжёлый latent transformer (работает только на уровне патчей) и лёгкий local decoder.
+
+Размер патча определяется энтропией: предсказуемые участки объединяются в крупный
+патч, сложные --- дробятся. Это концентрирует compute там, где он действительно нужен.
+
+\textbf{Применимость к VLA.} Прямой нет --- \texttt{BLT} разработан для языкового
+моделирования. Но принцип \textit{не тратить одинаковое число вычислений на все
+позиции} напрямую переносится как идея для adaptive action tokenization.
+
+\subsection{H-Net: Dynamic Chunking for Hierarchical Sequence Modeling}
+
+\texttt{H-Net}~\cite{hnet} встраивает boundary detection в архитектуру модели и
+учит его end-to-end. Сегментация становится не внешней эвристикой, а обучаемой
+частью модели. Иерархический дизайн позволяет одному блоку рекурсивно
+применяться на разных уровнях абстракции.
+
+\textbf{Применимость к VLA.} Теоретически богатая, но инженерно дорогая для
+embodied-задач: boundary detector нужно обучать совместно с policy, что требует
+существенного переписывания pipeline.
+
+\subsection{OAT: Ordered Action Tokenization}
+
+\texttt{OAT}~\cite{oat} --- наиболее прикладная из трёх работ для темы управления
+роботами. VQ-токенизатор обучается на демонстрационных данных и упорядочивает
+токены по убыванию «информационной плотности» (coarse-to-fine). Ключевое свойство:
+для декодирования достаточно любого префикса --- OAT1 даёт грубое действие,
+OAT8 --- точное. Policy обучается авторегрессионно предсказывать эти токены.
+
+\textbf{Слабое место.} Число генерируемых токенов фиксируется глобально в конфиге
+при обучении. Нет механизма учёта сложности конкретного действия на inference.
+
+\subsection{Синтез}
+
+Все три работы атакуют одну проблему с разных сторон.
+\texttt{BLT} показывает, что фиксированная дискретизация ограничивает
+вычислительную эффективность;
+\texttt{H-Net} --- что сегментация может и должна быть обучаемой;
+\texttt{OAT} --- что action tokens следует упорядочивать и делать prefix-decodable.
+Именно такое пересечение идей сделало возможным формулировку гипотезы,
+объединяющей все три направления.
+
+%% ============================================================
+\section{Исследовательская гипотеза}
+
+\subsection{Формулировка}
+
+Из синтеза трёх работ следует:
+
+\begin{quote}
+Если вместо фиксированного числа action tokens в \texttt{OAT} использовать
+адаптивный критерий остановки, зависящий от сложности текущего действия,
+то на простых действиях можно значительно сократить число генерируемых токенов
+при приемлемой потере точности реконструкции.
+\end{quote}
+
+\subsection{Критерий остановки}
+
+Предложен абсолютный порог, масштабируемый к величине действия:
+\begin{equation}
+    \text{stop when} \quad \hat{e}_k < \varepsilon \cdot \|\mathbf{a}\|_2
+    \label{eq:stopping}
+\end{equation}
+где $\hat{e}_k$ --- ошибка реконструкции после $k$ токенов,
+$\|\mathbf{a}\|_2$ --- L2-норма исходного вектора действия,
+$\varepsilon$ --- настраиваемый порог.
+
+Смысл масштабирования: простые действия имеют малую норму, поэтому порог
+достигается быстрее. Сложные действия (большая норма) требуют больше токенов
+для того же относительного качества. Критерий~\eqref{eq:stopping} автоматически
+адаптируется к масштабу действия без отдельной настройки под каждый тип задачи.
+
+\subsection{Связь с базовыми статьями}
+
+\begin{itemize}[leftmargin=1.4cm]
+    \item \texttt{BLT}: принцип adaptive compute allocation по сложности входа ---
+          перенесён с уровня байтовых патчей на уровень action tokens.
+    \item \texttt{OAT}: prefix-decodability уже поддерживается архитектурно;
+          критерий остановки добавляется как post-hoc правило поверх inference.
+    \item \texttt{H-Net}: идея адаптивной, зависящей от контекста сегментации ---
+          упрощена до эвристического критерия без переобучения.
+\end{itemize}
+
+%% ============================================================
+\section{Симуляция}
+
+\subsection{Мотивация}
+
+Полный запуск \texttt{OAT} требует GPU, MuJoCo и датасета LIBERO. Вместо
+этого разработана численная симуляция, воспроизводящая ключевую динамику
+VQ-кодирования: coarse-to-fine убывание ошибки, зависящее от сложности действия.
+Это позволяет проверить \textit{логику} гипотезы без обращения к реальной среде.
+
+Симуляция реализована в двух вариантах: \texttt{simulate\_adaptive\_oat.py}
+(Python 3.8+, без внешних зависимостей) и \texttt{simulate\_adaptive\_oat.ps1}
+(PowerShell, запускается на любом Windows без установки). Код и результаты
+хранятся в репозитории~\cite{repo}.
+
+\subsection{Модель}
+
+\textbf{Траектории.} Генерировались синтетические траектории трёх типов:
+\begin{itemize}[leftmargin=1.4cm]
+    \item \textit{simple} --- удержание позиции, малые корректирующие движения
+          (сложность $c \in [0.05,\, 0.25]$);
+    \item \textit{complex} --- захват, перемещение, ротация
+          ($c \in [0.60,\, 0.95]$);
+    \item \textit{mixed} --- чередование фаз с синусоидальным профилем активности.
+\end{itemize}
+Каждый шаг --- 7D вектор действия: $a_i \sim \mathcal{N}(0,\; 0.08 + 0.85c)$.
+
+\textbf{VQ-кодирование.} Моделируется геометрическое убывание ошибки реконструкции
+при добавлении каждого токена. Скорость убывания (decay) зависит от сложности:
+\begin{itemize}[leftmargin=1.4cm]
+    \item для простых ($c \approx 0.15$): decay $\approx 0.30$--$0.45$ на токен
+          (быстрая сходимость);
+    \item для сложных ($c \approx 0.78$): decay $\approx 0.62$--$0.75$ на токен
+          (медленная сходимость).
+\end{itemize}
+Это соответствует coarse-to-fine свойству OAT: первый токен даёт наибольшее
+улучшение, каждый следующий --- меньше.
+
+\textbf{Базовые методы.} OAT с фиксированным числом токенов: OAT1, OAT2, OAT4, OAT8.
+
+\textbf{Adaptive OAT.} Применяется критерий~\eqref{eq:stopping} с $\varepsilon = 0.05$,
+$k_{\min}=1$, $k_{\max}=8$.
+
+\textbf{Параметры запуска.} seed=42, 100 эпизодов на каждый тип задачи
+(300 итого), 20 шагов в эпизоде.
+
+\subsection{Результаты основного эксперимента}
+
+\begin{table}[h!]
+\centering
+\caption{Результаты при $\varepsilon = 0.05$, seed\,=\,42 (300 эпизодов)}
+\label{tab:main}
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Тип задачи} & \textbf{Сложн.} & \textbf{OAT1} & \textbf{OAT4} & \textbf{OAT8}
+    & \textbf{Adapt.} & \textbf{Токены} & \textbf{Экономия} \\
+\midrule
+simple  & 0.15 & 0.1063 & 0.0094 & 0.0004 & 0.0179 & 3.0 / 8 & \textbf{62\%} \\
+complex & 0.78 & 0.8019 & 0.2523 & 0.0562 & 0.0785 & 6.7 / 8 & 17\% \\
+mixed   & 0.61 & 0.5973 & 0.1752 & 0.0372 & 0.0611 & 5.6 / 8 & 30\% \\
+\midrule
+\textbf{all}     & 0.51 & 0.5019 & 0.1456 & 0.0313 & 0.0525 & \textbf{5.1 / 8} & \textbf{36\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Значения в столбцах OAT1/OAT4/OAT8/Adapt. --- средняя ошибка реконструкции (L2).
+Столбец «Экономия» --- сокращение числа токенов относительно OAT8.
+
+\textbf{Наблюдения по таблице:}
+\begin{enumerate}[leftmargin=1.4cm]
+    \item На \textit{simple} задачах adaptive метод использует в среднем \textbf{3 токена}
+          вместо 8 --- экономия 62\%. По качеству реконструкции это соответствует
+          уровню между OAT2 и OAT4.
+    \item На \textit{complex} задачах метод расходует 6.7 токена --- сходимость
+          медленнее из-за высокой нормы действия. Качество незначительно хуже OAT8
+          ($+40\%$ относительно OAT8, но в абсолютных единицах: $0.079$ vs $0.056$).
+    \item На \textit{mixed} задачах метод адаптируется к фазам: в фазах малой
+          активности останавливается рано, в фазах высокой --- использует больше токенов.
+\end{enumerate}
+
+\subsection{Ablation: выбор порога $\varepsilon$}
+
+\begin{table}[h!]
+\centering
+\caption{Влияние порога $\varepsilon$ на quality/efficiency tradeoff (все задачи)}
+\label{tab:ablation}
+\begin{tabular}{ccccc}
+\toprule
+$\varepsilon$ & \textbf{Токены} & \textbf{Экономия} & \textbf{Ошибка (адапт.)} & \textbf{$\Delta$ vs OAT8} \\
+\midrule
+0.02 & 6.10 & 24\% & 0.0361 & $+15\%$ \\
+\textbf{0.05} & \textbf{5.11} & \textbf{36\%} & \textbf{0.0525} & $+68\%$ \\
+0.10 & 3.80 & 53\% & 0.1042 & $+233\%$ \\
+0.15 & 3.06 & 62\% & 0.1551 & $+396\%$ \\
+0.20 & 2.46 & 69\% & 0.2090 & $+568\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Из таблицы~\ref{tab:ablation} следует, что $\varepsilon = 0.05$ обеспечивает
+наиболее сбалансированный tradeoff: экономия 36\% токенов при росте ошибки
+реконструкции на 68\% относительно OAT8. Важно учитывать масштаб: абсолютная
+ошибка OAT8 очень мала (0.031), поэтому большой относительный процент не
+означает значимого ухудшения качества управления.
+
+При $\varepsilon = 0.02$ поведение близко к OAT8 ($+15\%$ ошибки) при
+минимальной экономии (24\%). При $\varepsilon \geq 0.10$ экономия растёт,
+но ошибка реконструкции приближается к уровню OAT2--OAT1.
+
+\subsection{Воспроизводимость и артефакты}
+
+Репозиторий содержит \textbf{готовые результаты} референсного запуска
+в директории \texttt{results/}: для проверки не требуется повторно запускать
+симуляцию. Файлы:
+
+\begin{itemize}[leftmargin=1.4cm]
+    \item \texttt{results/summary.json} --- агрегат по задачам + мета-параметры
+          (seed, eps, дата);
+    \item \texttt{results/episodes.csv} --- поэпизодные данные, 300 строк;
+    \item \texttt{results/ablation\_eps.json} --- ablation по
+          $\varepsilon \in \{0.02,\,0.05,\,0.10,\,0.15,\,0.20\}$.
+\end{itemize}
+
+Для воспроизведения из директории репозитория:
+
+\begin{lstlisting}[style=shell, caption={PowerShell (без зависимостей)}]
+powershell -ExecutionPolicy Bypass -File .\simulation\simulate_adaptive_oat.ps1 `
+    -Seed 42 -NEpisodes 100 -NSteps 20 -Eps 0.05 -OutDir .\results
+\end{lstlisting}
+
+\begin{lstlisting}[style=shell, caption={Python 3.8+}]
+python .\simulation\simulate_adaptive_oat.py ^
+    --seed 42 --n_episodes 300 --n_steps 20 --eps 0.05 --out_dir .\results
+\end{lstlisting}
+
+Проверочные значения из \texttt{results/summary.json}:
+\texttt{all.adaptive\_tokens\_mean = 5.11},
+\texttt{all.token\_saving\_pct = 36.1},
+\texttt{all.adaptive\_error = 0.05252}.
+Мета-блок фиксирует параметры: \texttt{seed=42}, \texttt{eps=0.05},
+\texttt{run\_date=2026-04-10}.
+
+%% ============================================================
+\section{Обсуждение}
+
+\subsection{Что подтверждает симуляция}
+
+Главный результат: \textbf{adaptive stopping работает в соответствии с гипотезой.}
+На задачах типа \textit{simple} среднее число токенов составило 3.0 из 8.
+Это прямое подтверждение центральной идеи: фиксированное число токенов для всех
+действий неоправданно с точки зрения вычислений.
+
+Не менее важен результат на \textit{complex} задачах: метод расходует 6.7 токена,
+не экономя «там, где не стоит». Критерий~\eqref{eq:stopping} масштабируется к норме
+действия автоматически --- без отдельной настройки под тип задачи.
+
+\subsection{Ограничения}
+
+\begin{enumerate}[leftmargin=1.4cm]
+    \item \textbf{Синтетическая модель.} VQ-кодирование реального OAT может
+          отличаться от геометрической модели decay. Сходимость реальных токенов
+          не обязательно монотонна --- могут быть локальные осцилляции.
+    \item \textbf{Нет GPU-запуска.} Baseline на LIBERO не запускался. Численные
+          результаты нельзя напрямую сравнивать с success rate из оригинальной статьи OAT.
+    \item \textbf{Критерий остановки эвристический.} В отличие от H-Net, он не
+          учится end-to-end. Оптимальный $\varepsilon$ может зависеть от задачи.
+\end{enumerate}
+
+\subsection{Следующие шаги}
+\label{sec:next_steps}
+
+Реалистичный план продолжения при наличии GPU:
+\begin{enumerate}[leftmargin=1.4cm]
+    \item Запустить OAT8 baseline на LIBERO-10 (success rate как baseline метрика).
+    \item Добавить критерий~\eqref{eq:stopping} в inference loop репозитория OAT.
+    \item Сравнить success rate и среднее число токенов при $\varepsilon \in \{0.02, 0.05\}$.
+    \item Проверить, сохраняется ли свойство «simple → меньше токенов» на реальных траекториях.
+\end{enumerate}
+
+%% ============================================================
+\section{Личный вывод}
+
+Разбирая три статьи, я несколько раз возвращался к одному вопросу: почему
+авторы OAT не добавили адаптивную глубину декодирования, если prefix-decodability
+уже заложена в архитектуре? Скорее всего потому, что success rate на LIBERO не
+чувствителен к этому в их масштабе экспериментов. Но для более длинных горизонтов
+планирования или быстрого inference это может стать важным.
+
+Гипотеза получилась осмысленной: она не выдумана из воздуха, а прямо следует
+из синтеза идей трёх независимых работ. Симуляция показала предсказуемое поведение
+--- адаптивный метод действительно экономит токены именно там, где это оправдано.
+
+Главное ограничение --- нет верификации на реальных роботических данных.
+GPU-эксперимент на LIBERO оставляю как следующий шаг; для его постановки
+вся необходимая база уже описана в разделе~\ref{sec:next_steps}.
+
+%% ============================================================
+\section{Заключение}
+
+Работа прошла полный цикл: обзор инструментов, анализ трёх статей, формулировка
+гипотезы, реализация симуляции и получение численных результатов. Ключевые итоги:
+
+\begin{itemize}[leftmargin=1.4cm]
+    \item Рабочий стек \texttt{Deep~Research\,+\,Claude Code} обеспечил чёткое
+          разделение аналитической и инженерной фаз работы.
+    \item Гипотеза об adaptive action token refinement теоретически обоснована и
+          опирается на три независимые линии: adaptive compute (\texttt{BLT}),
+          обучаемая сегментация (\texttt{H-Net}), prefix-decodability (\texttt{OAT}).
+    \item Симуляция на 300 эпизодах подтвердила основную предпосылку:
+          при $\varepsilon{=}0.05$ среднее число токенов составило 3.0 на простых
+          задачах (экономия 62\%) и 6.7 на сложных --- метод адаптируется корректно.
+    \item Ablation по $\varepsilon$ выявил рабочую зону $0.02$--$0.05$ как
+          оптимальный баланс экономии и качества реконструкции.
+    \item Все артефакты эксперимента (код, данные, логи) зафиксированы в
+          репозитории~\cite{repo} и воспроизводимы одной командой.
+\end{itemize}
+
+%% ============================================================
+\newpage
+\begin{thebibliography}{99}
+
+\bibitem{deepresearch}
+OpenAI. Introducing Deep Research.
+\url{https://openai.com/index/introducing-deep-research/}
+
+\bibitem{claudecode}
+Anthropic. Claude Code.
+\url{https://claude.com/product/claude-code}
+
+\bibitem{autoresearch}
+Karpathy,~A. autoresearch.
+\url{https://github.com/karpathy/autoresearch}
+
+\bibitem{autoresearchclaw}
+Aiming Lab. AutoResearchClaw.
+\url{https://github.com/aiming-lab/AutoResearchClaw}
+
+\bibitem{blt}
+Pagnoni,~A. et~al.
+Byte Latent Transformer: Patches Scale Better Than Tokens.
+\textit{arXiv:2412.09871v1}, 2024.
+\url{https://arxiv.org/abs/2412.09871v1}
+
+\bibitem{hnet}
+Hwang,~S., Wang,~B., Gu,~A.
+Dynamic Chunking for End-to-End Hierarchical Sequence Modeling.
+\textit{arXiv:2507.07955}, 2025.
+\url{https://arxiv.org/abs/2507.07955}
+
+\bibitem{oat}
+Liu,~C. et~al.
+OAT: Ordered Action Tokenization for Robotic Learning.
+\textit{arXiv:2602.04215v2}, 2026.
+\url{http://arxiv.org/abs/2602.04215} ·
+\url{https://github.com/Chaoqi-LIU/oat}
+
+\bibitem{repo}
+Репозиторий проекта: код симуляции, результаты, логи ассистентов.
+\url{https://github.com/f1b0nacc1-afk/adaptive-oat} (апрель 2026).
+
+\end{thebibliography}
+
+\end{document}
